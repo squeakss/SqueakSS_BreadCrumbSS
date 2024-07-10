@@ -1,10 +1,26 @@
 use regex::Regex;
+use reqwest::Error;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::{thread, time};
 use thirtyfour::prelude::*;
 use tokio;
+
+#[derive(Debug, Deserialize)]
+struct IpInfo {
+    ip: String,
+    hostname: Option<String>,
+    city: Option<String>,
+    region: Option<String>,
+    country: Option<String>,
+    loc: Option<String>,
+    org: Option<String>,
+    postal: Option<String>,
+    timezone: Option<String>,
+    readme: Option<String>,
+}
 
 // Function to pause execution for a given number of seconds
 fn pause_with_delay(seconds: u64) {
@@ -14,8 +30,7 @@ fn pause_with_delay(seconds: u64) {
 
 // Function to validate domain names using a regex pattern
 fn is_valid_domain(domain: &str) -> bool {
-    let domain_regex =
-        Regex::new(r"^(?i:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,})$").unwrap();
+    let domain_regex = Regex::new(r"^(?i:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,})$").unwrap();
     domain_regex.is_match(domain)
 }
 
@@ -47,8 +62,7 @@ async fn get_element_text(driver: &WebDriver, xpath: &str) -> WebDriverResult<Op
 
 // Function to scrape location data
 async fn scrape_location_data(driver: &WebDriver) -> WebDriverResult<Option<String>> {
-    let xpath =
-        "//div[@id='location-data-wrapper']//span[@class='flag-icon flag-icon-us']/parent::td";
+    let xpath = "//div[@id='location-data-wrapper']//span[@class='flag-icon flag-icon-us']/parent::td";
     get_element_text(driver, xpath).await
 }
 
@@ -57,20 +71,11 @@ async fn scrape_owner_details(driver: &WebDriver) -> WebDriverResult<HashMap<Str
     let mut data = HashMap::new();
 
     let sections = vec![
-        (
-            "IP ADDRESS",
-            "//td[text()='IP Address']/following-sibling::td",
-        ),
-        (
-            "FWD/REV DNS MATCH",
-            "//td[text()='FWD/REV DNS MATCH']/following-sibling::td",
-        ),
+        ("IP ADDRESS", "//td[text()='IP Address']/following-sibling::td"),
+        ("FWD/REV DNS MATCH", "//td[text()='FWD/REV DNS MATCH']/following-sibling::td"),
         ("HOSTNAME", "//td[text()='Hostname']/following-sibling::td"),
         ("DOMAIN", "//td[text()='Domain']/following-sibling::td"),
-        (
-            "NETWORK OWNER",
-            "//td[text()='Network Owner']/following-sibling::td",
-        ),
+        ("NETWORK OWNER", "//td[text()='Network Owner']/following-sibling::td"),
     ];
 
     for (key, xpath) in sections {
@@ -87,14 +92,8 @@ async fn scrape_reputation_details(driver: &WebDriver) -> WebDriverResult<HashMa
     let mut data = HashMap::new();
 
     let sections = vec![
-        (
-            "SENDER IP REPUTATION",
-            "//td[text()='Sender IP Reputation']/following-sibling::td",
-        ),
-        (
-            "WEB REPUTATION",
-            "//td[text()='Web Reputation']/following-sibling::td",
-        ),
+        ("SENDER IP REPUTATION", "//td[text()='Sender IP Reputation']/following-sibling::td"),
+        ("WEB REPUTATION", "//td[text()='Web Reputation']/following-sibling::td"),
     ];
 
     for (key, xpath) in sections {
@@ -111,22 +110,10 @@ async fn scrape_email_volume_data(driver: &WebDriver) -> WebDriverResult<HashMap
     let mut data = HashMap::new();
 
     let sections = vec![
-        (
-            "EMAIL VOLUME LAST DAY",
-            "//td[text()='Email Volume Last Day']/following-sibling::td",
-        ),
-        (
-            "EMAIL VOLUME LAST MONTH",
-            "//td[text()='Email Volume Last Month']/following-sibling::td",
-        ),
-        (
-            "VOLUME CHANGE",
-            "//td[text()='Volume Change']/following-sibling::td",
-        ),
-        (
-            "SPAM LEVEL",
-            "//td[text()='Spam Level']/following-sibling::td",
-        ),
+        ("EMAIL VOLUME LAST DAY", "//td[text()='Email Volume Last Day']/following-sibling::td"),
+        ("EMAIL VOLUME LAST MONTH", "//td[text()='Email Volume Last Month']/following-sibling::td"),
+        ("VOLUME CHANGE", "//td[text()='Volume Change']/following-sibling::td"),
+        ("SPAM LEVEL", "//td[text()='Spam Level']/following-sibling::td"),
     ];
 
     for (key, xpath) in sections {
@@ -159,6 +146,14 @@ async fn scrape_block_lists(driver: &WebDriver) -> WebDriverResult<HashMap<Strin
     Ok(data)
 }
 
+// Function to get IP information from ipinfo.io
+async fn get_ip_info(ip: &str) -> Result<IpInfo, Error> {
+    let url = format!("https://ipinfo.io/{}", ip);
+    let response = reqwest::get(&url).await?;
+    let ip_info: IpInfo = response.json().await?;
+    Ok(ip_info)
+}
+
 // Main function to search Talos and display the results
 async fn search_talos(query: &str) -> WebDriverResult<HashMap<String, HashMap<String, String>>> {
     let mut caps = DesiredCapabilities::chrome();
@@ -169,10 +164,7 @@ async fn search_talos(query: &str) -> WebDriverResult<HashMap<String, HashMap<St
     caps.add_chrome_arg("--disable-dev-shm-usage")?;
 
     let driver = WebDriver::new("http://localhost:9515", caps).await?;
-    let url = format!(
-        "https://talosintelligence.com/reputation_center/lookup?search={}",
-        query
-    );
+    let url = format!("https://talosintelligence.com/reputation_center/lookup?search={}", query);
     driver.goto(&url).await?;
 
     // Added delay to allow the webpage to load
@@ -181,13 +173,7 @@ async fn search_talos(query: &str) -> WebDriverResult<HashMap<String, HashMap<St
     let mut data = HashMap::new();
 
     if let Some(location) = scrape_location_data(&driver).await? {
-        data.insert(
-            "LOCATION DATA".to_string(),
-            [("Location".to_string(), location)]
-                .iter()
-                .cloned()
-                .collect(),
-        );
+        data.insert("LOCATION DATA".to_string(), [("Location".to_string(), location)].iter().cloned().collect());
     }
 
     let owner_details = scrape_owner_details(&driver).await?;
@@ -227,7 +213,7 @@ async fn main() -> WebDriverResult<()> {
     println!("            *                    |_____/ \\__, |\\__,_|\\___|\\__,______|_____|_____/        _     _____ _____ ");
     println!("                    *            |  _ \\     | |           | |/ ____|                    | |   / ____/ ____|");
     println!("                                 | |_) |_ __|___  __ _  __| | |     _ __ _   _ _ __ ___ | |__| (___| (___  ");
-    println!("                    *            |  _ <| '__/ _ \\/ _` |/ _` | |    | '__| | | | '_ ` _ \\| '_ \\\\___ \\___  \\ ");
+    println!("                    *            |  _ <| '__/ _ \\/ _` |/ _` | |    | '__| | | | '_ ` _ \\| '_ \\\\___ \\___ \\ ");
     println!("                            *    | |_) | | |  __| (_| | (_| | |____| |  | |_| | | | | | | |_) ____) ____) |");
     println!("                                 |____/|_|  \\___|\\__,_|\\__,_|\\_____|_|   \\__,_|_| |_| |_|_.__|_____|_____/ ");
     println!("                            *");
@@ -302,6 +288,36 @@ async fn main() -> WebDriverResult<()> {
                 println!("\nTALOS SECURITY INTELLIGENCE BLOCK LIST");
                 for (key, value) in talos_block_list {
                     println!("{}:\t{}", key, value);
+                }
+            }
+
+            // Get IP information from ipinfo.io
+            if let Ok(ip_info) = get_ip_info(&sanitized_input).await {
+                println!("\nIPINFO.IO DATA");
+                println!("IP:\t{}", ip_info.ip);
+                if let Some(hostname) = ip_info.hostname {
+                    println!("Hostname:\t{}", hostname);
+                }
+                if let Some(city) = ip_info.city {
+                    println!("City:\t{}", city);
+                }
+                if let Some(region) = ip_info.region {
+                    println!("Region:\t{}", region);
+                }
+                if let Some(country) = ip_info.country {
+                    println!("Country:\t{}", country);
+                }
+                if let Some(loc) = ip_info.loc {
+                    println!("Location:\t{}", loc);
+                }
+                if let Some(org) = ip_info.org {
+                    println!("Organization:\t{}", org);
+                }
+                if let Some(postal) = ip_info.postal {
+                    println!("Postal Code:\t{}", postal);
+                }
+                if let Some(timezone) = ip_info.timezone {
+                    println!("Timezone:\t{}", timezone);
                 }
             }
         }
