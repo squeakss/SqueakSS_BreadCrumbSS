@@ -1,25 +1,30 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
 use regex::Regex;
+use std::collections::HashMap;
 use std::io::{self, Write};
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::{thread, time};
 use thirtyfour::prelude::*;
 use tokio;
-use std::{thread, time};
-use std::collections::HashMap;
 
+// Function to pause execution for a given number of seconds
 fn pause_with_delay(seconds: u64) {
     let pause_time = time::Duration::from_secs(seconds);
     thread::sleep(pause_time);
 }
 
+// Function to validate domain names using a regex pattern
 fn is_valid_domain(domain: &str) -> bool {
-    let domain_regex = Regex::new(r"^(?i:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,})$").unwrap();
+    let domain_regex =
+        Regex::new(r"^(?i:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,})$").unwrap();
     domain_regex.is_match(domain)
 }
 
+// Function to validate IP addresses
 fn is_valid_ip(ip: &str) -> bool {
     ip.parse::<Ipv4Addr>().is_ok() || ip.parse::<Ipv6Addr>().is_ok()
 }
 
+// Function to sanitize user input to ensure it is a valid domain or IP address
 fn sanitize_input(input: &str) -> Option<String> {
     let trimmed_input = input.trim();
     if is_valid_domain(trimmed_input) || is_valid_ip(trimmed_input) {
@@ -29,18 +34,145 @@ fn sanitize_input(input: &str) -> Option<String> {
     }
 }
 
-async fn search_talos(query: &str) -> WebDriverResult<HashMap<String, String>> {
-    let mut caps = DesiredCapabilities::chrome();
-    let profile_path = ""; // Update this to the path of your profile
-    caps.add_chrome_arg(&format!("--user-data-dir={}", profile_path))?;
+// Function to extract text from an element found by XPath
+async fn get_element_text(driver: &WebDriver, xpath: &str) -> WebDriverResult<Option<String>> {
+    match driver.find(By::XPath(xpath)).await {
+        Ok(element) => {
+            let text = element.text().await?;
+            Ok(Some(text))
+        }
+        Err(_) => Ok(None),
+    }
+}
 
+// Function to scrape location data
+async fn scrape_location_data(driver: &WebDriver) -> WebDriverResult<Option<String>> {
+    let xpath =
+        "//div[@id='location-data-wrapper']//span[@class='flag-icon flag-icon-us']/parent::td";
+    get_element_text(driver, xpath).await
+}
+
+// Function to scrape owner details
+async fn scrape_owner_details(driver: &WebDriver) -> WebDriverResult<HashMap<String, String>> {
+    let mut data = HashMap::new();
+
+    let sections = vec![
+        (
+            "IP ADDRESS",
+            "//td[text()='IP Address']/following-sibling::td",
+        ),
+        (
+            "FWD/REV DNS MATCH",
+            "//td[text()='FWD/REV DNS MATCH']/following-sibling::td",
+        ),
+        ("HOSTNAME", "//td[text()='Hostname']/following-sibling::td"),
+        ("DOMAIN", "//td[text()='Domain']/following-sibling::td"),
+        (
+            "NETWORK OWNER",
+            "//td[text()='Network Owner']/following-sibling::td",
+        ),
+    ];
+
+    for (key, xpath) in sections {
+        if let Some(text) = get_element_text(driver, xpath).await? {
+            data.insert(key.to_string(), text);
+        }
+    }
+
+    Ok(data)
+}
+
+// Function to scrape reputation details
+async fn scrape_reputation_details(driver: &WebDriver) -> WebDriverResult<HashMap<String, String>> {
+    let mut data = HashMap::new();
+
+    let sections = vec![
+        (
+            "SENDER IP REPUTATION",
+            "//td[text()='Sender IP Reputation']/following-sibling::td",
+        ),
+        (
+            "WEB REPUTATION",
+            "//td[text()='Web Reputation']/following-sibling::td",
+        ),
+    ];
+
+    for (key, xpath) in sections {
+        if let Some(text) = get_element_text(driver, xpath).await? {
+            data.insert(key.to_string(), text);
+        }
+    }
+
+    Ok(data)
+}
+
+// Function to scrape email volume data
+async fn scrape_email_volume_data(driver: &WebDriver) -> WebDriverResult<HashMap<String, String>> {
+    let mut data = HashMap::new();
+
+    let sections = vec![
+        (
+            "EMAIL VOLUME LAST DAY",
+            "//td[text()='Email Volume Last Day']/following-sibling::td",
+        ),
+        (
+            "EMAIL VOLUME LAST MONTH",
+            "//td[text()='Email Volume Last Month']/following-sibling::td",
+        ),
+        (
+            "VOLUME CHANGE",
+            "//td[text()='Volume Change']/following-sibling::td",
+        ),
+        (
+            "SPAM LEVEL",
+            "//td[text()='Spam Level']/following-sibling::td",
+        ),
+    ];
+
+    for (key, xpath) in sections {
+        if let Some(text) = get_element_text(driver, xpath).await? {
+            data.insert(key.to_string(), text);
+        }
+    }
+
+    Ok(data)
+}
+
+// Function to scrape block lists
+async fn scrape_block_lists(driver: &WebDriver) -> WebDriverResult<HashMap<String, String>> {
+    let mut data = HashMap::new();
+
+    let sections = vec![
+        ("BL.SPAMCOP.NET", "//td[@class='chart-data-label col_left']/a[contains(@href, 'spamcop.net')]/../following-sibling::td"),
+        ("CBL.ABUSEAT.ORG", "//td[@class='chart-data-label col_left']/a[contains(@href, 'abuseat.org')]/../following-sibling::td"),
+        ("PBL.SPAMHAUS.ORG", "//td[@class='chart-data-label col_left']/a[contains(@href, 'spamhaus.org')]/../following-sibling::td"),
+        ("SBL.SPAMHAUS.ORG", "//td[@class='chart-data-label col_left']/a[contains(@href, 'spamhaus.org')]/../following-sibling::td"),
+        ("ADDED TO THE BLOCK LIST", "//td[text()='Added to the Block List']/following-sibling::td"),
+    ];
+
+    for (key, xpath) in sections {
+        if let Some(text) = get_element_text(driver, xpath).await? {
+            data.insert(key.to_string(), text);
+        }
+    }
+
+    Ok(data)
+}
+
+// Main function to search Talos and display the results
+async fn search_talos(query: &str) -> WebDriverResult<HashMap<String, HashMap<String, String>>> {
+    let mut caps = DesiredCapabilities::chrome();
+    let profile_path = "C:/Users/atteb/AppData/Local/Google/Chrome/User Data"; // Update this to the path of your profile
+    caps.add_chrome_arg(&format!("--user-data-dir={}", profile_path))?;
     caps.add_chrome_arg("--homepage=about:blank")?;
     caps.add_chrome_arg("--no-sandbox")?;
     caps.add_chrome_arg("--disable-dev-shm-usage")?;
 
     let driver = WebDriver::new("http://localhost:9515", caps).await?;
-
-    let url = format!("https://talosintelligence.com/reputation_center/lookup?search={}", query);
+    let url = format!(
+        "https://talosintelligence.com/reputation_center/lookup?search={}",
+        query
+    );
     driver.goto(&url).await?;
 
     // Added delay to allow the webpage to load
@@ -48,38 +180,34 @@ async fn search_talos(query: &str) -> WebDriverResult<HashMap<String, String>> {
 
     let mut data = HashMap::new();
 
-    let sections = vec![
-        ("LOCATION DATA", "Location Data"),
-        ("IP ADDRESS", "IP Address"),
-        ("FWD/REV DNS MATCH", "FWD/REV DNS MATCH"),
-        ("HOSTNAME", "Hostname"),
-        ("DOMAIN", "Domain"),
-        ("NETWORK OWNER", "Network Owner"),
-        ("SENDER IP REPUTATION", "Sender IP Reputation"),
-        ("WEB REPUTATION", "Web Reputation"),
-        ("EMAIL VOLUME LAST DAY", "Email Volume Last Day"),
-        ("EMAIL VOLUME LAST MONTH", "Email Volume Last Month"),
-        ("VOLUME CHANGE", "Volume Change"),
-        ("SPAM LEVEL", "Spam Level"),
-        ("BL.SPAMCOP.NET", "BL.SPAMCOP.NET"),
-        ("CBL.ABUSEAT.ORG", "CBL.ABUSEAT.ORG"),
-        ("PBL.SPAMHAUS.ORG", "PBL.SPAMHAUS.ORG"),
-        ("SBL.SPAMHAUS.ORG", "SBL.SPAMHAUS.ORG"),
-        ("ADDED TO THE BLOCK LIST", "Added To The Block List"),
-    ];
+    if let Some(location) = scrape_location_data(&driver).await? {
+        data.insert(
+            "LOCATION DATA".to_string(),
+            [("Location".to_string(), location)]
+                .iter()
+                .cloned()
+                .collect(),
+        );
+    }
 
-    for (key, text) in sections {
-        let xpath = if key == "LOCATION DATA" {
-            "//div[@id='location-data-wrapper']//span[@class='flag-icon flag-icon-us']/parent::td".to_string()
-        } else {
-            format!("//td[text()='{}']/following-sibling::td", text)
-        };
+    let owner_details = scrape_owner_details(&driver).await?;
+    if !owner_details.is_empty() {
+        data.insert("OWNER DETAILS".to_string(), owner_details);
+    }
 
-        if let Ok(element) = driver.find(By::XPath(&xpath)).await {
-            if let Ok(element_text) = element.text().await {
-                data.insert(key.to_string(), element_text);
-            }
-        }
+    let reputation_details = scrape_reputation_details(&driver).await?;
+    if !reputation_details.is_empty() {
+        data.insert("REPUTATION DETAILS".to_string(), reputation_details);
+    }
+
+    let email_volume_data = scrape_email_volume_data(&driver).await?;
+    if !email_volume_data.is_empty() {
+        data.insert("EMAIL VOLUME DATA".to_string(), email_volume_data);
+    }
+
+    let block_lists = scrape_block_lists(&driver).await?;
+    if !block_lists.is_empty() {
+        data.insert("BLOCK LISTS".to_string(), block_lists);
     }
 
     driver.quit().await?;
@@ -94,26 +222,27 @@ async fn main() -> WebDriverResult<()> {
     println!(" (\\(\\                              _____                        _     _____ _____                          ");
     println!("( -.-)                            / ____|                      | |   / ____/ ____|                         ");
     println!("o_(\")(\")                         | (___   __ _ _   _  ___  __ _| | _| (___| (___                           ");
-    println!("	    *                     \\___ \\ / _` | | | |/ _ \\/ _` | |/ /\\___ \\\\___ \\                          ");
+    println!("            *                     \\___ \\ / _` | | | |/ _ \\/ _` | |/ /\\___ \\\\___ \\                          ");
     println!("                                  ____) | (_| | |_| |  __| (_| |   < ____) ____) |                         ");
-    println!("	    *                    |_____/ \\__, |\\__,_|\\___|\\__,______|_____|_____/        _     _____ _____ ");
-    println!("		    *            |  _ \\     | |           | |/ ____|                    | |   / ____/ ____|");
+    println!("            *                    |_____/ \\__, |\\__,_|\\___|\\__,______|_____|_____/        _     _____ _____ ");
+    println!("                    *            |  _ \\     | |           | |/ ____|                    | |   / ____/ ____|");
     println!("                                 | |_) |_ __|___  __ _  __| | |     _ __ _   _ _ __ ___ | |__| (___| (___  ");
-    println!("		    *            |  _ <| '__/ _ \\/ _` |/ _` | |    | '__| | | | '_ ` _ \\| '_ \\\\___ \\\\___ \\ ");
-    println!("			    *    | |_) | | |  __| (_| | (_| | |____| |  | |_| | | | | | | |_) ____) ____) |");
-    println!("			         |____/|_|  \\___|\\__,_|\\__,_|\\_____|_|   \\__,_|_| |_| |_|_.__|_____|_____/ ");
-    println!("			    *");
-    println!("				    *");
-    println!("			    	 _________");
-    println!("			    	(         )");
-    println!("			    	 |       |");
-    println!("			    	 |       |");
-    println!("			    	 (_______)");
+    println!("                    *            |  _ <| '__/ _ \\/ _` |/ _` | |    | '__| | | | '_ ` _ \\| '_ \\\\___ \\___  \\ ");
+    println!("                            *    | |_) | | |  __| (_| | (_| | |____| |  | |_| | | | | | | |_) ____) ____) |");
+    println!("                                 |____/|_|  \\___|\\__,_|\\__,_|\\_____|_|   \\__,_|_| |_| |_|_.__|_____|_____/ ");
+    println!("                            *");
+    println!("                                    *");
+    println!("                                 _________");
+    println!("                                (         )");
+    println!("                                 |       |");
+    println!("                                 |       |");
+    println!("                                 (_______)");
 
     pause_with_delay(3);
 
     let sanitized_input: String;
 
+    // Loop to get user input and validate it
     loop {
         let mut input = String::new();
         print!("Please enter an IP address or domain: ");
@@ -124,43 +253,58 @@ async fn main() -> WebDriverResult<()> {
             Some(valid_input) => {
                 sanitized_input = valid_input;
                 break;
-            },
+            }
             None => {
                 println!("Invalid input. Please enter a valid IP address or domain.");
             }
         }
     }
 
+    // Search Talos and display the results
     match search_talos(&sanitized_input).await {
         Ok(data) => {
-            println!("\nLOCATION DATA");
-            println!("{}", data.get("LOCATION DATA").unwrap_or(&"".to_string()));
+            if let Some(location_data) = data.get("LOCATION DATA") {
+                println!("\nLOCATION DATA");
+                if let Some(location) = location_data.get("Location") {
+                    println!("{}", location);
+                }
+            }
 
-            println!("\nOWNER DETAILS");
-            println!("IP ADDRESS:\t{}", data.get("IP ADDRESS").unwrap_or(&"".to_string()));
-            println!("FWD/REV DNS MATCH:\t{}", data.get("FWD/REV DNS MATCH").unwrap_or(&"".to_string()));
-            println!("HOSTNAME:\t{}", data.get("HOSTNAME").unwrap_or(&"".to_string()));
-            println!("DOMAIN:\t{}", data.get("DOMAIN").unwrap_or(&"".to_string()));
-            println!("NETWORK OWNER:\t{}", data.get("NETWORK OWNER").unwrap_or(&"".to_string()));
+            if let Some(owner_details) = data.get("OWNER DETAILS") {
+                println!("\nOWNER DETAILS");
+                for (key, value) in owner_details {
+                    println!("{}:\t{}", key, value);
+                }
+            }
 
-            println!("\nREPUTATION DETAILS");
-            println!("SENDER IP REPUTATION:\t{}", data.get("SENDER IP REPUTATION").unwrap_or(&"".to_string()));
-            println!("WEB REPUTATION:\t{}", data.get("WEB REPUTATION").unwrap_or(&"".to_string()));
+            if let Some(reputation_details) = data.get("REPUTATION DETAILS") {
+                println!("\nREPUTATION DETAILS");
+                for (key, value) in reputation_details {
+                    println!("{}:\t{}", key, value);
+                }
+            }
 
-            println!("\nEMAIL VOLUME DATA");
-            println!("EMAIL VOLUME:\t{} {}", data.get("EMAIL VOLUME LAST DAY").unwrap_or(&"".to_string()), data.get("EMAIL VOLUME LAST MONTH").unwrap_or(&"".to_string()));
-            println!("VOLUME CHANGE:\t{}", data.get("VOLUME CHANGE").unwrap_or(&"".to_string()));
-            println!("SPAM LEVEL:\t{}", data.get("SPAM LEVEL").unwrap_or(&"".to_string()));
+            if let Some(email_volume_data) = data.get("EMAIL VOLUME DATA") {
+                println!("\nEMAIL VOLUME DATA");
+                for (key, value) in email_volume_data {
+                    println!("{}:\t{}", key, value);
+                }
+            }
 
-            println!("\nBLOCK LISTS");
-            println!("BL.SPAMCOP.NET:\t{}", data.get("BL.SPAMCOP.NET").unwrap_or(&"".to_string()));
-            println!("CBL.ABUSEAT.ORG:\t{}", data.get("CBL.ABUSEAT.ORG").unwrap_or(&"".to_string()));
-            println!("PBL.SPAMHAUS.ORG:\t{}", data.get("PBL.SPAMHAUS.ORG").unwrap_or(&"".to_string()));
-            println!("SBL.SPAMHAUS.ORG:\t{}", data.get("SBL.SPAMHAUS.ORG").unwrap_or(&"".to_string()));
+            if let Some(block_lists) = data.get("BLOCK LISTS") {
+                println!("\nBLOCK LISTS");
+                for (key, value) in block_lists {
+                    println!("{}:\t{}", key, value);
+                }
+            }
 
-            println!("\nTALOS SECURITY INTELLIGENCE BLOCK LIST");
-            println!("ADDED TO THE BLOCK LIST:\t{}", data.get("ADDED TO THE BLOCK LIST").unwrap_or(&"".to_string()));
-        },
+            if let Some(talos_block_list) = data.get("TALOS SECURITY INTELLIGENCE BLOCK LIST") {
+                println!("\nTALOS SECURITY INTELLIGENCE BLOCK LIST");
+                for (key, value) in talos_block_list {
+                    println!("{}:\t{}", key, value);
+                }
+            }
+        }
         Err(err) => eprintln!("Error during search: {}", err),
     }
 
