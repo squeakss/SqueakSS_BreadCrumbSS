@@ -10,7 +10,7 @@ Start the Chromedriver before starting BreadCrumbss and be sure that no instance
 
 If you don't currently have a profile on Chrome, then you will need to make one to avoid an endless loop of captchas.
 
-On line 35 'let profile_path = "";' insert the path to your profile inside of the double quotes. C:/Users/####/AppData/Local/Google/Chrome/User Data is the standard profile path for Windows, ~/.config/google-chrome/ for Linux, and ~/Library/Application Support/Google/Chrome/ for MAC.
+On line 160 'let profile_path = "";' insert the path to your profile inside of the double quotes. C:/Users/####/AppData/Local/Google/Chrome/User Data is the standard profile path for Windows, ~/.config/google-chrome/ for Linux, and ~/Library/Application Support/Google/Chrome/ for MAC.
 
 
 Some data will be scraped........
