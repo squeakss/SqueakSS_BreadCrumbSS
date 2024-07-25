@@ -192,7 +192,7 @@ async fn get_ip_info(ip: &str) -> Result<IpInfo, Error> {
 // Main function to search Talos and display the results
 async fn search_talos(query: &str) -> WebDriverResult<HashMap<String, HashMap<String, String>>> {
     let mut caps = DesiredCapabilities::chrome();
-    let profile_path = "C:/Users/atteb/AppData/Local/Google/Chrome/User Data"; // Update this to the path of your profile
+    let profile_path = ""; // Update this to the path of your profile
     caps.add_chrome_arg(&format!("--user-data-dir={}", profile_path))?;
     caps.add_chrome_arg("--homepage=about:blank")?;
     caps.add_chrome_arg("--no-sandbox")?;
