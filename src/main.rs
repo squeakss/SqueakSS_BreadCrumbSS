@@ -2,11 +2,14 @@ use regex::Regex;
 use reqwest::Error;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::path::Path;
 use std::{thread, time};
 use thirtyfour::prelude::*;
 use tokio;
+use chrono::Utc;
 
 #[derive(Debug, Deserialize)]
 struct IpInfo {
@@ -20,6 +23,38 @@ struct IpInfo {
     postal: Option<String>,
     timezone: Option<String>,
     readme: Option<String>,
+}
+
+impl IpInfo {
+    fn to_hash_map(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        map.insert("IP".to_string(), self.ip.clone());
+        if let Some(ref hostname) = self.hostname {
+            map.insert("Hostname".to_string(), hostname.clone());
+        }
+        if let Some(ref city) = self.city {
+            map.insert("City".to_string(), city.clone());
+        }
+        if let Some(ref region) = self.region {
+            map.insert("Region".to_string(), region.clone());
+        }
+        if let Some(ref country) = self.country {
+            map.insert("Country".to_string(), country.clone());
+        }
+        if let Some(ref loc) = self.loc {
+            map.insert("Location".to_string(), loc.clone());
+        }
+        if let Some(ref org) = self.org {
+            map.insert("Organization".to_string(), org.clone());
+        }
+        if let Some(ref postal) = self.postal {
+            map.insert("Postal Code".to_string(), postal.clone());
+        }
+        if let Some(ref timezone) = self.timezone {
+            map.insert("Timezone".to_string(), timezone.clone());
+        }
+        map
+    }
 }
 
 // Function to pause execution for a given number of seconds
@@ -51,7 +86,7 @@ fn sanitize_input(input: &str) -> Option<String> {
 
 // Function to extract text from an element found by XPath
 async fn get_element_text(driver: &WebDriver, xpath: &str) -> WebDriverResult<Option<String>> {
-    match driver.find(By::XPath(xpath)).await {
+    match driver.find_element(By::XPath(xpath)).await {
         Ok(element) => {
             let text = element.text().await?;
             Ok(Some(text))
@@ -165,7 +200,7 @@ async fn search_talos(query: &str) -> WebDriverResult<HashMap<String, HashMap<St
 
     let driver = WebDriver::new("http://localhost:9515", caps).await?;
     let url = format!("https://talosintelligence.com/reputation_center/lookup?search={}", query);
-    driver.goto(&url).await?;
+    driver.get(&url).await?;
 
     // Added delay to allow the webpage to load
     pause_with_delay(5);
@@ -226,103 +261,107 @@ async fn main() -> WebDriverResult<()> {
 
     pause_with_delay(3);
 
-    let sanitized_input: String;
-
-    // Loop to get user input and validate it
-    loop {
-        let mut input = String::new();
-        print!("Please enter an IP address or domain: ");
-        io::stdout().flush().unwrap();
-        io::stdin().read_line(&mut input).unwrap();
-
-        match sanitize_input(&input) {
-            Some(valid_input) => {
-                sanitized_input = valid_input;
-                break;
-            }
-            None => {
-                println!("Invalid input. Please enter a valid IP address or domain.");
-            }
+    // Read the name of the most recently created file
+    let latest_file_path = "latest_file.txt";
+    let filename = if let Ok(file) = File::open(latest_file_path) {
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_ok() {
+            line.trim().to_string()
+        } else {
+            eprintln!("Failed to read the latest file marker.");
+            std::process::exit(1);
         }
-    }
+    } else {
+        eprintln!("Could not open the latest file marker.");
+        std::process::exit(1);
+    };
 
-    // Search Talos and display the results
-    match search_talos(&sanitized_input).await {
-        Ok(data) => {
-            if let Some(location_data) = data.get("LOCATION DATA") {
-                println!("\nLOCATION DATA");
-                if let Some(location) = location_data.get("Location") {
-                    println!("{}", location);
-                }
-            }
+    // Read IP addresses from the file
+    if let Ok(lines) = read_lines(&filename) {
+        let mut results = HashMap::new();
+        for line in lines {
+            if let Ok(ip) = line {
+                // Sanitize and process each IP address
+                if let Some(sanitized_ip) = sanitize_input(&ip) {
+                    println!("Processing IP: {}", sanitized_ip);
 
-            if let Some(owner_details) = data.get("OWNER DETAILS") {
-                println!("\nOWNER DETAILS");
-                for (key, value) in owner_details {
-                    println!("{}:\t{}", key, value);
-                }
-            }
+                    // Search Talos and display the results for each IP address
+                    match search_talos(&sanitized_ip).await {
+                        Ok(mut data) => {
+                            if let Ok(ip_info) = get_ip_info(&sanitized_ip).await {
+                                data.insert("IPINFO.IO DATA".to_string(), ip_info.to_hash_map());
+                            }
+                            results.insert(sanitized_ip.clone(), data);
 
-            if let Some(reputation_details) = data.get("REPUTATION DETAILS") {
-                println!("\nREPUTATION DETAILS");
-                for (key, value) in reputation_details {
-                    println!("{}:\t{}", key, value);
-                }
-            }
+                            if let Some(location_data) = results.get("LOCATION DATA") {
+                                println!("\nLOCATION DATA");
+                                if let Some(location) = location_data.get("Location") {
+                                    println!("{:?}", location);
+                                }
+                            }
 
-            if let Some(email_volume_data) = data.get("EMAIL VOLUME DATA") {
-                println!("\nEMAIL VOLUME DATA");
-                for (key, value) in email_volume_data {
-                    println!("{}:\t{}", key, value);
-                }
-            }
+                            if let Some(owner_details) = results.get("OWNER DETAILS") {
+                                println!("\nOWNER DETAILS");
+                                for (key, value) in owner_details {
+                                    println!("{}:\t{:?}", key, value);
+                                }
+                            }
 
-            if let Some(block_lists) = data.get("BLOCK LISTS") {
-                println!("\nBLOCK LISTS");
-                for (key, value) in block_lists {
-                    println!("{}:\t{}", key, value);
-                }
-            }
+                            if let Some(reputation_details) = results.get("REPUTATION DETAILS") {
+                                println!("\nREPUTATION DETAILS");
+                                for (key, value) in reputation_details {
+                                    println!("{}:\t{:?}", key, value);
+                                }
+                            }
 
-            if let Some(talos_block_list) = data.get("TALOS SECURITY INTELLIGENCE BLOCK LIST") {
-                println!("\nTALOS SECURITY INTELLIGENCE BLOCK LIST");
-                for (key, value) in talos_block_list {
-                    println!("{}:\t{}", key, value);
-                }
-            }
+                            if let Some(email_volume_data) = results.get("EMAIL VOLUME DATA") {
+                                println!("\nEMAIL VOLUME DATA");
+                                for (key, value) in email_volume_data {
+                                    println!("{}:\t{:?}", key, value);
+                                }
+                            }
 
-            // Get IP information from ipinfo.io
-            if let Ok(ip_info) = get_ip_info(&sanitized_input).await {
-                println!("\nIPINFO.IO DATA");
-                println!("IP:\t{}", ip_info.ip);
-                if let Some(hostname) = ip_info.hostname {
-                    println!("Hostname:\t{}", hostname);
-                }
-                if let Some(city) = ip_info.city {
-                    println!("City:\t{}", city);
-                }
-                if let Some(region) = ip_info.region {
-                    println!("Region:\t{}", region);
-                }
-                if let Some(country) = ip_info.country {
-                    println!("Country:\t{}", country);
-                }
-                if let Some(loc) = ip_info.loc {
-                    println!("Location:\t{}", loc);
-                }
-                if let Some(org) = ip_info.org {
-                    println!("Organization:\t{}", org);
-                }
-                if let Some(postal) = ip_info.postal {
-                    println!("Postal Code:\t{}", postal);
-                }
-                if let Some(timezone) = ip_info.timezone {
-                    println!("Timezone:\t{}", timezone);
+                            if let Some(block_lists) = results.get("BLOCK LISTS") {
+                                println!("\nBLOCK LISTS");
+                                for (key, value) in block_lists {
+                                    println!("{}:\t{:?}", key, value);
+                                }
+                            }
+
+                            if let Some(talos_block_list) = results.get("TALOS SECURITY INTELLIGENCE BLOCK LIST") {
+                                println!("\nTALOS SECURITY INTELLIGENCE BLOCK LIST");
+                                for (key, value) in talos_block_list {
+                                    println!("{}:\t{:?}", key, value);
+                                }
+                            }
+                        }
+                        Err(err) => eprintln!("Error during search: {}", err),
+                    }
                 }
             }
         }
-        Err(err) => eprintln!("Error during search: {}", err),
+
+        // Save the results to a new file
+        let timestamp = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        let output_filename = format!("results_{}.txt", timestamp);
+        let mut output_file = OpenOptions::new().create(true).write(true).open(output_filename.clone()).unwrap();
+        for (ip, data) in results {
+            writeln!(output_file, "IP: {}\nData: {:?}", ip, data).unwrap();
+        }
+        println!("Results saved to {}", output_filename);
+    } else {
+        eprintln!("Could not read IP addresses from the file.");
     }
 
     Ok(())
+}
+
+// A function to read lines from a file
+fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
+where
+    P: AsRef<Path>,
+{
+    let file = File::open(filename)?;
+    Ok(io::BufReader::new(file).lines())
 }
