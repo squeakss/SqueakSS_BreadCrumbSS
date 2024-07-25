@@ -1,6 +1,6 @@
 Why so many connections?
 
-The goal of breadcrumbs is to streamline IP and Domain enumeration of local connections by automating the use of available OSINT tools while avoiding any Pay to Play API's that might get in the way.
+The goal of breadcrumbs is to streamline IP enumeration of local connections by automating the use of available OSINT tools while avoiding any Pay to Play API's that might get in the way.
 
 The Talos and ipinfo references are complete. I'll be adding functions for abuse.ch's URLHAUS and more.
 
