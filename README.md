@@ -20,3 +20,5 @@ On line 195 'let profile_path = "";' insert the path to your profile inside of t
 
 **Some scraping will take place.**
 
+Make sure the file structure matches this repo. Execute "runit.bat" add it to a crontab if you please.
+
